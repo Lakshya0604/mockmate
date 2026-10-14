@@ -52,3 +52,4 @@ select { display:block; width:100%; margin-top:6px; padding:10px 12px; border:1p
 .sample { background:#f9fafb; border-left:3px solid var(--brand); padding:8px 12px; margin:8px 0; font-size:.95rem; }
 .qa { border-top:1px solid var(--line); padding-top:14px; margin-top:14px; }
 .you { background:#f3f4f6; padding:8px 12px; border-radius:8px; white-space:pre-wrap; }
+.info { color: var(--muted, #7aa); font-size: 0.9rem; }

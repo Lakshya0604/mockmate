@@ -12,8 +12,32 @@ function useHashRoute() {
 }
 const go = (p) => { window.location.hash = p; };
 
+function ResetForm() {
+  const [p, setP] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState('');
+  const token = new URLSearchParams(useHashRoute().split('?')[1] || '').get('token') || '';
+  async function submit(e) {
+    e.preventDefault(); setErr(''); setBusy(true);
+    try { const d = await api('/auth/reset', { method: 'POST', body: { token, password: p } }); setToken(d.token); window.location.hash = '/'; window.location.reload(); }
+    catch (e2) { setErr(e2.message); setBusy(false); }
+  }
+  if (!token) return <div className="page center"><p>That reset link looks wrong. <a href="#/" className="link">Request a new one</a>.</p></div>;
+  return (
+    <div className="page center">
+      <form className="card auth" onSubmit={submit}>
+        <h2>Choose a new password</h2>
+        <label>New password<input type="password" required minLength={8} value={p} onChange={(e) => setP(e.target.value)} autoComplete="new-password" placeholder="At least 8 characters" /></label>
+        <button className="btn" disabled={busy}>{busy ? 'Saving...' : 'Save new password'}</button>
+        {err && <p className="error">{err}</p>}
+      </form>
+    </div>
+  );
+}
+
 function AuthForm({ onAuth }) {
   const [mode, setMode] = useState('login');
+  const [info, setInfo] = useState('');
   const [f, setF] = useState({ name: '', email: '', password: '' });
   const [err, setErr] = useState('');
   const [busy, setBusy] = useState(false);
@@ -22,6 +46,7 @@ function AuthForm({ onAuth }) {
     e.preventDefault();
     setErr(''); setBusy(true);
     try {
+      if (mode === 'forgot') { const d = await api('/auth/forgot', { method: 'POST', body: { email: f.email } }); setInfo(d.message); setBusy(false); return; }
       const data = await api(`/auth/${mode}`, { method: 'POST', body: f });
       setToken(data.token);
       onAuth(data.user);
@@ -30,17 +55,19 @@ function AuthForm({ onAuth }) {
   }
   return (
     <div className="card auth">
-      <h2>{mode === 'login' ? 'Log in' : 'Create your account'}</h2>
+      <h2>{mode === 'login' ? 'Log in' : mode === 'signup' ? 'Create your account' : 'Reset your password'}</h2>
       <form onSubmit={submit}>
         {mode === 'signup' && <label>Name<input value={f.name} onChange={set('name')} autoComplete="name" /></label>}
         <label>Email<input type="email" required value={f.email} onChange={set('email')} autoComplete="email" /></label>
-        <label>Password<input type="password" required minLength={8} value={f.password} onChange={set('password')} autoComplete={mode === 'login' ? 'current-password' : 'new-password'} placeholder="At least 8 characters" /></label>
+        {mode !== 'forgot' && <label>Password<input type="password" required minLength={8} value={f.password} onChange={set('password')} autoComplete={mode === 'login' ? 'current-password' : 'new-password'} placeholder="At least 8 characters" /></label>}
         {err && <p className="error">{err}</p>}
-        <button className="btn" disabled={busy}>{busy ? 'Please wait...' : mode === 'login' ? 'Log in' : 'Sign up'}</button>
+        <button className="btn" disabled={busy}>{busy ? 'Please wait...' : mode === 'login' ? 'Log in' : mode === 'signup' ? 'Sign up' : 'Send reset link'}</button>
       </form>
       <p className="muted">
         {mode === 'login' ? 'New here? ' : 'Already have an account? '}
-        <a href="#/" onClick={(e) => { e.preventDefault(); setMode(mode === 'login' ? 'signup' : 'login'); setErr(''); }}>{mode === 'login' ? 'Create an account' : 'Log in'}</a>
+        <a href="#/" onClick={(e) => { e.preventDefault(); setMode(mode === 'login' ? 'signup' : 'login'); setErr(''); setInfo(''); }}>{mode === 'login' ? 'Create an account' : 'Log in'}</a>
+        {mode === 'login' && <> · <a href="#/" onClick={(e) => { e.preventDefault(); setMode('forgot'); setErr(''); setInfo(''); }}>Forgot password?</a></>}
+        {info && <p className="info">{info}</p>}
       </p>
     </div>
   );
@@ -260,7 +287,8 @@ export default function App() {
   function logout() { setToken(null); setUser(null); go('/'); }
   if (!ready) return <div className="wrap"><p>Loading...</p></div>;
   let page;
-  if (!user) page = <Landing onAuth={(u) => { setUser(u); go('/new'); }} />;
+  if (!user && route.startsWith('/reset')) page = <ResetForm />;
+  else if (!user) page = <Landing onAuth={(u) => { setUser(u); go('/new'); }} />;
   else if (route.startsWith('/interview/')) page = <Interview key={route} id={route.split('/')[2]} />;
   else if (route === '/history') page = <History />;
   else page = <Start />;

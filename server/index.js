@@ -4,6 +4,7 @@ import mongoose from 'mongoose';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import rateLimit from 'express-rate-limit';
+import crypto from 'node:crypto';
 import path from 'node:path';
 import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -12,7 +13,7 @@ import { generateQuestions, evaluateAnswer, summarizeInterview, llmConfigured } 
 import { clampScore, overallScore, verdict, wordCount } from './scoring.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const { MONGODB_URI, JWT_SECRET } = process.env;
+const { MONGODB_URI, JWT_SECRET, BREVO_API_KEY, MAIL_FROM, MAIL_FROM_NAME = 'MockMate', APP_URL = 'https://mockmate-40bm.onrender.com' } = process.env;
 if (!MONGODB_URI || !JWT_SECRET) { console.error('MONGODB_URI and JWT_SECRET must be set'); process.exit(1); }
 
 const LEVELS = ['Intern', 'Fresher', 'Junior', 'Mid-level', 'Senior'];
@@ -29,6 +30,14 @@ const authLimiter = mk(15 * 60 * 1000, 30, 'Too many attempts. Try again in a fe
 const userKey = (req) => req.userId || req.ip;
 const startLimiter = mk(24 * 60 * 60 * 1000, 10, 'Daily limit reached (10 interviews). Come back tomorrow.', userKey);
 const answerLimiter = mk(60 * 60 * 1000, 60, 'Hourly answer limit reached. Please try again later.', userKey);
+
+const sha256 = (s) => crypto.createHash('sha256').update(s).digest('hex');
+
+async function sendMail(to, subject, html) {
+  if (!BREVO_API_KEY || !MAIL_FROM) { console.warn('mail skipped: Brevo not configured'); return; }
+  const r = await fetch('https://api.brevo.com/v3/smtp/email', { method: 'POST', headers: { 'api-key': BREVO_API_KEY, 'content-type': 'application/json' }, body: JSON.stringify({ sender: { name: MAIL_FROM_NAME, email: MAIL_FROM }, to: [{ email: to }], subject, htmlContent: html }) });
+  if (!r.ok) console.error('mail failed', await r.text().catch(() => r.status));
+}
 
 const sign = (u) => jwt.sign({ id: u._id.toString() }, JWT_SECRET, { expiresIn: '14d' });
 const publicUser = (u) => ({ id: u._id, name: u.name, email: u.email });
@@ -57,6 +66,32 @@ app.post('/api/auth/login', authLimiter, async (req, res) => {
   const { email = '', password = '' } = req.body || {};
   const user = await User.findOne({ email: String(email).toLowerCase().trim() });
   if (!user || !(await bcrypt.compare(String(password), user.passwordHash))) return res.status(401).json({ error: 'Wrong email or password.' });
+  res.json({ token: sign(user), user: publicUser(user) });
+});
+
+app.post('/api/auth/forgot', authLimiter, async (req, res) => {
+  const email = String(req.body?.email || '').toLowerCase().trim();
+  const user = await User.findOne({ email });
+  if (user) {
+    const token = crypto.randomBytes(32).toString('hex');
+    user.resetHash = sha256(token);
+    user.resetExpires = new Date(Date.now() + 30 * 60 * 1000);
+    await user.save();
+    const link = `${APP_URL}/#/reset?token=${token}`;
+    await sendMail(email, 'Reset your MockMate password', `<p>Hi ${user.name},</p><p>You asked to reset your MockMate password.</p><p><a href="${link}">${link}</a></p><p>The link works for 30 minutes. If you did not ask, ignore this mail.</p>`);
+  }
+  res.json({ ok: true, message: 'If that account exists, a reset link is on its way.' });
+});
+
+app.post('/api/auth/reset', authLimiter, async (req, res) => {
+  const { token = '', password = '' } = req.body || {};
+  if (String(password).length < 8) return res.status(400).json({ error: 'Password must be at least 8 characters.' });
+  const user = await User.findOne({ resetHash: sha256(String(token)), resetExpires: { $gt: new Date() } });
+  if (!user) return res.status(400).json({ error: 'That reset link is invalid or expired. Request a new one.' });
+  user.passwordHash = await bcrypt.hash(String(password), 10);
+  user.resetHash = null;
+  user.resetExpires = null;
+  await user.save();
   res.json({ token: sign(user), user: publicUser(user) });
 });
 
